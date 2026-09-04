@@ -5,7 +5,8 @@ import requests
 import socket
 import ipaddress
 import subprocess
-
+import IP2Location  
+import os
 
 #check whether a value is an ip address or a host name
 def is_ip_address(value: str) -> bool:
@@ -16,9 +17,10 @@ def is_ip_address(value: str) -> bool:
         return False
 
 def process_csv(csv_file: str) -> pd.DataFrame:
-
     #read the csv
     df = pd.read_csv(csv_file)
+
+    database = IP2Location.IP2Location(os.path.join("data", "IP2LOCATION-LITE-DB5.BIN"))
 
     #initialize two new columns
     df["LATITUDE"] = None
@@ -30,24 +32,17 @@ def process_csv(csv_file: str) -> pd.DataFrame:
         valid_ip = True
         if not is_ip_address(ip_or_host):
             
-            #TODO: figure this out, there's some bad/invalid ip addresses on here. 
-            # also need to add our computer's ip addresses when the script is ran
+            #TODO: n    eed to add our computer's ip addresses when the script is ran
             try:
                 ip_or_host = socket.gethostbyname(ip_or_host)
             except socket.gaierror:
                 valid_ip = False
         if valid_ip:
-
-            #TODO: this may have to change. i'm getting rate limiter errors. maybe we can figure out an offline solution?
-            response = requests.get(f"http://ipwho.is/{ip_or_host}")
-            data = response.json()
-    
+            response = database.get_all(ip_or_host) 
             #setting the df values
             df.loc[index, "IP/HOST"] = ip_or_host
-
-            #tODO
-            df.loc[index, "LONGITUDE"] = data.get["longitude"]
-            df.loc[index, "LATITUDE"] = response.get["latitude"]
+            df.loc[index, "LONGITUDE"] = response.latitude
+            df.loc[index, "LATITUDE"] = response.longitude
         
         #for now, drop the rows whose latitude and longitutde fields are empty
     filtered_df = df[df["LATITUDE"].notna() & df["LONGITUDE"].notna()]
@@ -72,7 +67,7 @@ def main():
     
     #running ping tests
     for _, row in df.iterrows():
-        res = subprocess.run(["ping", "-c", "1", row["IP/HOST"]], capture_output=True, text=True)
+        res = subprocess.run(["ping", "-c", "11", row["IP/HOST"]], capture_output=True, text=True)
         print(res)
     return True
 
