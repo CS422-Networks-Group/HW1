@@ -1,41 +1,17 @@
-import ipaddress
 import shutil
 import subprocess
+import threading
 
 
-def get_latency_breakdown(ip: str):
-    """
-    Using traceroute to get the latency breakdown for a given IP address.
-    If the IP address is not reachable, it will return None.
-    Find the round-trip time from this machine to each intermediate hop
-    along the path towards destination ip addresses using traceroute. Filter
-    out non-responsive hops.
-    """
-    # Validate that ip is actually an IP address (not a hostname, flag, or
-    # shell metacharacters) before it ever reaches a subprocess call.
-    try:
-        ipaddress.ip_address(ip)
-    except ValueError:
-        raise ValueError(f"Invalid IP address: {ip!r}")
+def _run_traceroute(traceroute_path: str, ip: str, port: int | None):
+    cmd = [traceroute_path]
+    if port is not None:
+        cmd += ["-p", str(port)]
+    cmd.append(ip)
 
-    # Check if traceroute command is available
-    traceroute_path = shutil.which("traceroute")
-    if not traceroute_path:
-        raise EnvironmentError("traceroute command is not available on this system.")
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    output = result.stdout
 
-    # Run the traceroute command
-    try:
-        result = subprocess.run(
-            [traceroute_path, ip],
-            capture_output=True,
-            text=True,
-        )
-        output = result.stdout
-    except Exception as e:
-        print(f"Error running traceroute: {e}")
-        return None
-
-    # Parse the output to extract latency information
     latency_breakdown = []
     for line in output.splitlines()[1:]:  # Skip the first line (header)
         parts = line.split()
@@ -45,3 +21,48 @@ def get_latency_breakdown(ip: str):
             latency_breakdown.append((hop_number, latencies))
 
     return latency_breakdown
+
+
+def get_latency_breakdown(ip: str, port: int | tuple[int, int] | None = None):
+    """
+    Using traceroute to get the latency breakdown for a given IP address or hostname.
+    Find the round-trip time from this machine to each intermediate hop
+    along the path towards destination ip addresses using traceroute. Filter
+    out non-responsive hops.
+
+    port: None for traceroute's default port, an int for a single port, or
+    an (start, end) tuple to sweep an inclusive port range.
+    """
+    traceroute_path = shutil.which("traceroute")
+    if not traceroute_path:
+        raise EnvironmentError("traceroute command is not available on this system.")
+
+    try:
+        if isinstance(port, tuple):
+            start, end = port
+            return {p: _run_traceroute(traceroute_path, ip, p) for p in range(start, end + 1)}
+        return _run_traceroute(traceroute_path, ip, port)
+    except Exception as e:
+        print(f"Error running traceroute: {e}")
+        return None
+
+
+targets = [
+    ("lg.ams-nl.gigahost.no", (9201, 9240)),
+    ("185.102.217.170", 5201),
+    ("138.199.57.129", 5201),
+    ("a204.speedtest.wobcom.de", 5201),
+    ("156.146.53.53", 5201)
+]
+
+# Create a separate thread for each target to run traceroute concurrently
+
+threads = []
+for target, port in targets:
+    thread = threading.Thread(target=get_latency_breakdown, args=(target, port))
+    threads.append(thread)
+    thread.start()
+
+# Wait for all threads to complete
+for thread in threads:
+    thread.join()
