@@ -2,3 +2,4 @@ pandas
 matplotlib
 requests
 IP2Location
+tqdm
