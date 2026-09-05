@@ -11,6 +11,8 @@ import re
 from tqdm import tqdm
 import threading
 
+from visualize import get_own_location, plot_distance_vs_rtt
+
 #matches the linux ping summary line, e.g. "rtt min/avg/max/mdev = 12.345/23.456/34.567/5.678 ms"
 RTT_SUMMARY_RE = re.compile(
     r"(?:rtt|round-trip) min/avg/max/(?:mdev|stddev) = "
@@ -118,6 +120,9 @@ def main():
 
     print(df[["IP/HOST", "MIN_RTT", "AVG_RTT", "MAX_RTT"]])
     df.to_csv("data/ping_results.csv", index=False)
+
+    os.makedirs("plots", exist_ok=True)
+    plot_distance_vs_rtt(df, get_own_location(), "plots/distance_vs_rtt.pdf")
 
 
 if __name__ == "__main__":
