@@ -33,11 +33,11 @@ def plot_distance_vs_rtt(df: pd.DataFrame, origin: tuple[float, float], output_p
     plots the average RTT with a vertical bar spanning min-max RTT, to also
     surface what the README asks about in 1c (spread between min/max and distance).
     '''
-    origin_lat, origin_lon = origin
+    origin_lat, origin_lon = float(origin[0]), float(origin[1])
     df = df.dropna(subset=["LATITUDE", "LONGITUDE", "MIN_RTT", "AVG_RTT", "MAX_RTT"])
 
     distances = [
-        haversine_distance(origin_lat, origin_lon, lat, lon)
+        haversine_distance(origin_lat, origin_lon, float(lat), float(lon))
         for lat, lon in zip(df["LATITUDE"], df["LONGITUDE"])
     ]
 
