@@ -1,22 +1,10 @@
-import math
 import os
 
 import IP2Location
 import matplotlib.pyplot as plt
 import pandas as pd
 import requests
-
-
-EARTH_RADIUS_KM = 6371.0
-
-
-def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    #great-circle distance between two lat/long points, in km
-    lat1, lon1, lat2, lon2 = map(math.radians, (lat1, lon1, lat2, lon2))
-    dlat = lat2 - lat1
-    dlon = lon2 - lon1
-    a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
-    return 2 * EARTH_RADIUS_KM * math.asin(math.sqrt(a))
+from geopy.distance import geodesic
 
 
 def get_own_location(db_path: str = os.path.join("data", "IP2LOCATION-LITE-DB5.BIN")) -> tuple[float, float]:
@@ -29,15 +17,15 @@ def get_own_location(db_path: str = os.path.join("data", "IP2LOCATION-LITE-DB5.B
 
 def plot_distance_vs_rtt(df: pd.DataFrame, origin: tuple[float, float], output_path: str) -> None:
     '''
-    scatter plot of distance vs RTT (README 1b), one point per destination IP.
+    scatter plot of distance vs RTT, one point per destination IP.
     plots the average RTT with a vertical bar spanning min-max RTT, to also
     surface what the README asks about in 1c (spread between min/max and distance).
     '''
-    origin_lat, origin_lon = float(origin[0]), float(origin[1])
+    origin = (float(origin[0]), float(origin[1]))
     df = df.dropna(subset=["LATITUDE", "LONGITUDE", "MIN_RTT", "AVG_RTT", "MAX_RTT"])
 
     distances = [
-        haversine_distance(origin_lat, origin_lon, float(lat), float(lon))
+        geodesic(origin, (float(lat), float(lon))).km
         for lat, lon in zip(df["LATITUDE"], df["LONGITUDE"])
     ]
 
@@ -84,7 +72,7 @@ def plot_latency_breakdown(df: pd.DataFrame, output_path: str) -> None:
 
 def plot_hopcount_vs_rtt(df: pd.DataFrame, output_path: str) -> None:
     '''
-    scatter plot of hop count vs total RTT to destination, one point per destination IP (README 2c).
+    scatter plot of hop count vs total RTT to destination, one point per destination IP.
     expects the same shape as plot_latency_breakdown.
     '''
     grouped = df.groupby("DEST_IP").agg(hop_count=("HOP_NUM", "count"), total_rtt=("HOP_RTT", "sum"))

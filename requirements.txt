@@ -3,3 +3,4 @@ matplotlib
 requests
 IP2Location
 tqdm
+geopy
