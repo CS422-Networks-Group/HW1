@@ -5,6 +5,12 @@
    git clone <REPOSITORY-URL>
 ```
 
+## Prerequisites
+
+Python 3.14.7
+
+## 1. Ping Test and Round-Trip Time (RTT) — 50 points
+
 2. **Create a virtual environment**
 ```bash
    python3 -m venv venv
