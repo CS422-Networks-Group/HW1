@@ -8,7 +8,7 @@ out of the results.
 
 Usage:
     python3 src/latency_breakdown.py \
-        --input listed_iperf3_servers.csv \
+        --input data/listed_iperf3_servers.csv \
         --count 5 \
         --output latency_breakdown_results.json
 """
@@ -153,7 +153,7 @@ def get_latency_breakdown(
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--input", default="listed_iperf3_servers.csv",
+        "--input", default="data/listed_iperf3_servers.csv",
         help="CSV file with the iperf3 server list (columns: IP/HOST, PORT, ...).",
     )
     parser.add_argument("--count", type=int, default=5, help="Number of random targets to sample.")
