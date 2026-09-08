@@ -18,8 +18,7 @@ def get_own_location(db_path: str = os.path.join("data", "IP2LOCATION-LITE-DB5.B
 def plot_distance_vs_rtt(df: pd.DataFrame, origin: tuple[float, float], output_path: str) -> None:
     '''
     scatter plot of distance vs RTT, one point per destination IP.
-    plots the average RTT with a vertical bar spanning min-max RTT, to also
-    surface what the README asks about in 1c (spread between min/max and distance).
+    plots the average RTT with a vertical bar spanning min-max RTT.
     '''
     origin = (float(origin[0]), float(origin[1]))
     df = df.dropna(subset=["LATITUDE", "LONGITUDE", "MIN_RTT", "AVG_RTT", "MAX_RTT"])
