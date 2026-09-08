@@ -6,3 +6,5 @@ __pycache__/
 data/ping_results.csv
 
 plots/
+
+traceroute_raw/

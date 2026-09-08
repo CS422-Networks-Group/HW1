@@ -40,15 +40,9 @@ def plot_distance_vs_rtt(df: pd.DataFrame, origin: tuple[float, float], output_p
 
 
 def plot_latency_breakdown(df: pd.DataFrame, output_path: str) -> None:
-    '''
-    stacked bar chart of per-hop latency contribution for each destination IP.
-    expects one row per responsive hop: DEST_IP, HOP_NUM, HOP_IP, HOP_RTT, where
-    HOP_RTT is the RTT delta from the previous responsive hop, clamped to 0 when
-    negative (probe-to-probe jitter, path changes, MPLS tunnels can make a later
-    hop's RTT come back lower; see latency_breakdown.to_dataframe). Because of
-    that clamp, a bar's total height can run a bit above the real RTT to its
-    last responsive hop rather than landing on it exactly.
-    '''
+    '''Stacked bar chart of per-hop latency. Expects one row per
+    responsive hop: DEST_IP, HOP_NUM, HOP_IP, HOP_RTT (see
+    latency_breakdown.to_dataframe for how HOP_RTT is derived).'''
     fig, ax = plt.subplots(figsize=(10, 6))
 
     dest_ips = df["DEST_IP"].unique()
