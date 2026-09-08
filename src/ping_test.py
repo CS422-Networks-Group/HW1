@@ -50,6 +50,11 @@ def process_csv(csv_file: str) -> pd.DataFrame:
                 valid_ip = False
         if valid_ip:
             response = database.get_all(ip_or_host) 
+            
+            # Ignore edge case for now
+            if not response:
+                continue
+            
             #setting the df values
             df.loc[index, "IP/HOST"] = ip_or_host
             df.loc[index, "LATITUDE"] = response.latitude

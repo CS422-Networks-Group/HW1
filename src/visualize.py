@@ -43,16 +43,27 @@ def plot_distance_vs_rtt(df: pd.DataFrame, origin: tuple[float, float], output_p
 def plot_latency_breakdown(df: pd.DataFrame, output_path: str) -> None:
     '''
     stacked bar chart of per-hop latency contribution for each destination IP (README 2b).
-    expects one row per responsive hop: DEST_IP, HOP_NUM, HOP_IP, HOP_RTT
+    expects one row per responsive hop: DEST_IP, HOP_NUM, HOP_IP, HOP_RTT, where
+    HOP_RTT is the RTT delta from the previous responsive hop, clamped to 0 when
+    negative (probe-to-probe jitter, path changes, MPLS tunnels can make a later
+    hop's RTT come back lower; see latency_breakdown.to_dataframe). Because of
+    that clamp, a bar's total height can run a bit above the real RTT to its
+    last responsive hop rather than landing on it exactly.
     '''
     fig, ax = plt.subplots(figsize=(10, 6))
 
     dest_ips = df["DEST_IP"].unique()
     bottoms = {dest_ip: 0.0 for dest_ip in dest_ips}
-    max_hops = df.groupby("DEST_IP")["HOP_NUM"].count().max()
+    # NB: max *hop number* seen, not count of responsive hops per destination --
+    # traceroute filtering non-responsive hops leaves gaps (e.g. hops 4,5,11,12
+    # responsive => count is 4 but the last hop number is 12), so counting would
+    # silently truncate the higher hops off of every bar.
+    max_hops = df["HOP_NUM"].max()
 
     for hop_num in range(1, max_hops + 1):
         hop_rows = df[df["HOP_NUM"] == hop_num].set_index("DEST_IP")["HOP_RTT"]
+        if hop_rows.empty:
+            continue  # no destination had a responsive hop at this number
         heights = [hop_rows.get(dest_ip, 0.0) for dest_ip in dest_ips]
         bottom = [bottoms[dest_ip] for dest_ip in dest_ips]
         ax.bar(dest_ips, heights, bottom=bottom, label=f"hop {hop_num}")
@@ -73,7 +84,8 @@ def plot_latency_breakdown(df: pd.DataFrame, output_path: str) -> None:
 def plot_hopcount_vs_rtt(df: pd.DataFrame, output_path: str) -> None:
     '''
     scatter plot of hop count vs total RTT to destination, one point per destination IP.
-    expects the same shape as plot_latency_breakdown.
+    expects the same shape as plot_latency_breakdown. total_rtt = sum of the
+    (zero-clamped) HOP_RTT deltas -- see plot_latency_breakdown's docstring.
     '''
     grouped = df.groupby("DEST_IP").agg(hop_count=("HOP_NUM", "count"), total_rtt=("HOP_RTT", "sum"))
 
