@@ -1,3 +1,5 @@
+import argparse
+import math
 import subprocess
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -9,7 +11,7 @@ import IP2Location
 import os
 import re
 from tqdm import tqdm
-import threading
+from concurrent.futures import ThreadPoolExecutor
 from requests import get
 from geopy.distance import geodesic
 
@@ -38,7 +40,7 @@ def process_csv(csv_file: str) -> pd.DataFrame:
     #initialize two new columns
     df["LATITUDE"] = None
     df["LONGITUDE"] = None
-    
+
     #read each row in csv and obtain the latitude and longitude
     for index, row in df.iterrows():
         ip_or_host = row["IP/HOST"]
@@ -49,12 +51,12 @@ def process_csv(csv_file: str) -> pd.DataFrame:
             except socket.gaierror:
                 valid_ip = False
         if valid_ip:
-            response = database.get_all(ip_or_host) 
+            response = database.get_all(ip_or_host)
             #setting the df values
             df.loc[index, "IP/HOST"] = ip_or_host
             df.loc[index, "LATITUDE"] = response.latitude
             df.loc[index, "LONGITUDE"] = response.longitude
-        
+
         #for now, drop the rows whose latitude and longitutde fields are empty
     filtered_df = df[df["LATITUDE"].notna() & df["LONGITUDE"].notna()]
     ip = get('https://api.ipify.org').content.decode('utf8')
@@ -63,7 +65,7 @@ def process_csv(csv_file: str) -> pd.DataFrame:
         "LATITUDE": database.get_all(ip).latitude,
         "LONGITUDE": database.get_all(ip).longitude,
     }
-    
+
 
     return filtered_df
 
@@ -87,6 +89,38 @@ def execute_ping_tests(df: pd.DataFrame, start: int, end: int):
             df.at[index, "MIN_RTT"] = None
             df.at[index, "AVG_RTT"] = None
             df.at[index, "MAX_RTT"] = None
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description=""
+    )
+    parser.add_argument(
+        "input_csv",
+        nargs="?",
+        default="data/listed_iperf3_servers.csv",
+        help="Path to a CSV file containing an IP/HOST column with the addresses to test "
+             "(default: data/listed_iperf3_servers.csv).",
+    )
+    parser.add_argument(
+        "--output-csv",
+        default="data/ping_results.csv",
+        help="Path to write the ping results CSV to (default: data/ping_results.csv).",
+    )
+    parser.add_argument(
+        "--plot-output",
+        default="plots/distance_vs_rtt.pdf",
+        help="Path to write the distance vs. RTT plot to (default: plots/distance_vs_rtt.pdf).",
+    )
+    parser.add_argument(
+        "--threads",
+        type=int,
+        default=5,
+        help="Number of worker threads to split the ping tests across (default: 5).",
+    )
+    return parser.parse_args()
+
+
 def main():
     '''
     basic flow: read the csv
@@ -97,11 +131,13 @@ def main():
 
     run the ping tests
 
-    capture the data 
+    capture the data
 
     plot it
     '''
-    df = process_csv("data/listed_iperf3_servers.csv")
+    args = parse_args()
+
+    df = process_csv(args.input_csv)
     result_df = pd.DataFrame(index=range(df.shape[0]), columns=df.columns)
     result_df["IP_ADDRESS"] = None
     result_df["MIN RTT"] = None
@@ -114,34 +150,26 @@ def main():
         home_ip = (df.iloc[-1]["LATITUDE"], df.iloc[-1]["LONGITUDE"])
         dest_ip = (row["LATITUDE"], row["LONGITUDE"])
         result_df.loc[index,"DISTANCE"] = geodesic(home_ip, dest_ip).miles
-        
 
-
-
-    thread1 = threading.Thread(target=execute_ping_tests, args=(df, 0, 37))
-    thread2 = threading.Thread(target=execute_ping_tests, args=(df, 38, 75))
-    thread3 = threading.Thread(target=execute_ping_tests, args=(df, 76, 113))
-    thread4 = threading.Thread(target=execute_ping_tests, args=(df, 114, 151))
-    thread5 = threading.Thread(target=execute_ping_tests, args=(df, 152, 188))
-
-    thread1.start()
-    thread2.start()
-    thread3.start()
-    thread4.start()
-    thread5.start()
-
-    thread1.join()
-    thread2.join()
-    thread3.join()
-    thread4.join()
-
-    thread5.join()
+    num_rows = df.shape[0]
+    if num_rows:
+        num_threads = max(1, min(args.threads, num_rows))
+        chunk_size = math.ceil(num_rows / num_threads)
+        chunk_bounds = (
+            (start, min(start + chunk_size, num_rows) - 1)
+            for start in range(0, num_rows, chunk_size)
+        )
+        with ThreadPoolExecutor(max_workers=num_threads) as executor:
+            futures = [executor.submit(execute_ping_tests, df, start, end) for start, end in chunk_bounds]
+            for future in futures:
+                future.result()
 
     print(df[["IP/HOST", "MIN_RTT", "AVG_RTT", "MAX_RTT"]])
-    df.to_csv("data/ping_results.csv", index=False)
+    os.makedirs(os.path.dirname(args.output_csv) or ".", exist_ok=True)
+    df.to_csv(args.output_csv, index=False)
 
-    os.makedirs("plots", exist_ok=True)
-    plot_distance_vs_rtt(df, get_own_location(), "plots/distance_vs_rtt.pdf")
+    os.makedirs(os.path.dirname(args.plot_output) or ".", exist_ok=True)
+    plot_distance_vs_rtt(df, get_own_location(), args.plot_output)
 
 
 if __name__ == "__main__":
