@@ -52,8 +52,8 @@ def process_csv(csv_file: str) -> pd.DataFrame:
             response = database.get_all(ip_or_host) 
             #setting the df values
             df.loc[index, "IP/HOST"] = ip_or_host
-            df.loc[index, "LONGITUDE"] = response.latitude
-            df.loc[index, "LATITUDE"] = response.longitude
+            df.loc[index, "LATITUDE"] = response.latitude
+            df.loc[index, "LONGITUDE"] = response.longitude
         
         #for now, drop the rows whose latitude and longitutde fields are empty
     filtered_df = df[df["LATITUDE"].notna() & df["LONGITUDE"].notna()]
@@ -118,11 +118,11 @@ def main():
 
 
 
-    thread1 = threading.Thread(target=execute_ping_tests, args=(df, 0, 37, result_df))
-    thread2 = threading.Thread(target=execute_ping_tests, args=(df, 38, 75, result_df))
-    thread3 = threading.Thread(target=execute_ping_tests, args=(df, 76, 113, result_df))
-    thread4 = threading.Thread(target=execute_ping_tests, args=(df, 114, 151, result_df))
-    thread5 = threading.Thread(target=execute_ping_tests, args=(df, 152, 188, result_df))
+    thread1 = threading.Thread(target=execute_ping_tests, args=(df, 0, 37))
+    thread2 = threading.Thread(target=execute_ping_tests, args=(df, 38, 75))
+    thread3 = threading.Thread(target=execute_ping_tests, args=(df, 76, 113))
+    thread4 = threading.Thread(target=execute_ping_tests, args=(df, 114, 151))
+    thread5 = threading.Thread(target=execute_ping_tests, args=(df, 152, 188))
 
     thread1.start()
     thread2.start()
