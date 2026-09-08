@@ -29,31 +29,18 @@ IP_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
-def parse_port(port_field: str) -> int | None:
-    """Parse a PORT field (blank, "5201", or a range like "9205-9240") into
-    a single port number, using the first port of a range."""
-    port_field = (port_field or "").strip()
-    if not port_field:
-        return None
-    first = port_field.split("-")[0].strip()
-    return int(first) if first.isdigit() else None
-
-
-def load_targets(csv_path: str) -> list[tuple[str, int | None]]:
-    """Load (host, port) pairs from the iperf3 server list CSV."""
+def load_targets(csv_path: str) -> list[str]:
+    """Load the list of hosts/IPs from the iperf3 server list CSV."""
     targets = []
     with open(csv_path, newline="") as f:
         for row in csv.DictReader(f):
             host = (row.get("IP/HOST") or "").strip()
-            if not host:
-                continue
-            targets.append((host, parse_port(row.get("PORT", ""))))
+            if host:
+                targets.append(host)
     return targets
 
 
-def pick_random_targets(
-    targets: list[tuple[str, int | None]], count: int, seed: int | None = None
-) -> list[tuple[str, int | None]]:
+def pick_random_targets(targets: list[str], count: int, seed: int | None = None) -> list[str]:
     rng = random.Random(seed)
     return rng.sample(targets, k=min(count, len(targets)))
 
@@ -72,7 +59,7 @@ def _parse_traceroute_output(output: str) -> list[dict]:
             continue
         hop_number = int(tokens[0])
 
-        hop_ip = None
+        hop_ip = ""  # stays empty if no IP token is found on this hop's line
         latencies = []
         for i, tok in enumerate(tokens[1:], start=1):
             if tok == "ms":
@@ -82,7 +69,7 @@ def _parse_traceroute_output(output: str) -> list[dict]:
                     pass
             elif re.fullmatch(r"[\d.]+ms", tok):  # tolerate "4.543ms" too
                 latencies.append(float(tok[:-2]))
-            elif hop_ip is None and IP_RE.match(tok):
+            elif not hop_ip and IP_RE.match(tok):
                 hop_ip = tok
 
         if not latencies:
@@ -102,21 +89,17 @@ def _parse_traceroute_output(output: str) -> list[dict]:
 def _run_traceroute(
     traceroute_path: str,
     ip: str,
-    port: int | None,
     max_hops: int,
     queries: int,
     wait: int,
-    raw_path: str | None = None,
+    raw_path: str = "",
 ) -> list[dict]:
-    cmd = [traceroute_path, "-n", "-m", str(max_hops), "-q", str(queries), "-w", str(wait)]
-    if port is not None:
-        cmd += ["-p", str(port)]
-    cmd.append(ip)
+    cmd = [traceroute_path, "-n", "-m", str(max_hops), "-q", str(queries), "-w", str(wait), ip]
 
     timeout = max_hops * queries * wait + 30
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
 
-    if raw_path is not None:
+    if raw_path:
         # Keep the raw output on disk so re-parsing or spot-checking a hop
         # never requires re-running the measurement against the real network.
         os.makedirs(os.path.dirname(raw_path), exist_ok=True)
@@ -128,32 +111,31 @@ def _run_traceroute(
 
 def get_latency_breakdown(
     host: str,
-    port: int | None = None,
     max_hops: int = 30,
     queries: int = 3,
     wait: int = 1,
-    raw_dir: str | None = None,
-) -> dict | None:
-    """Traceroute `host`, filtering out non-responsive hops. Returns
-    {"resolved_ip": ..., "hops": [...]}, or None on failure."""
+    raw_dir: str = "",
+) -> dict:
+    """Traceroute `host`, filtering out non-responsive hops. Always returns
+    {"resolved_ip": ..., "hops": [...]}; both are empty on failure."""
     try:
         resolved_ip = socket.gethostbyname(host)
     except socket.gaierror as e:
         print(f"[{host}] could not resolve host: {e}")
-        return None
+        return {"resolved_ip": "", "hops": []}
     print(f"[{host}] resolved to {resolved_ip}")
 
     traceroute_path = shutil.which("traceroute")
     if not traceroute_path:
         raise EnvironmentError("traceroute command is not available on this system.")
 
-    raw_path = os.path.join(raw_dir, f"{resolved_ip}.txt") if raw_dir else None
+    raw_path = os.path.join(raw_dir, f"{resolved_ip}.txt") if raw_dir else ""
     print(f"[{resolved_ip}] running traceroute...")
     try:
-        hops = _run_traceroute(traceroute_path, resolved_ip, port, max_hops, queries, wait, raw_path)
+        hops = _run_traceroute(traceroute_path, resolved_ip, max_hops, queries, wait, raw_path)
     except Exception as e:
         print(f"[{resolved_ip}] traceroute failed: {e}")
-        return None
+        return {"resolved_ip": resolved_ip, "hops": []}
 
     print(f"[{resolved_ip}] {len(hops)} responsive hop(s): {hops}")
     return {"resolved_ip": resolved_ip, "hops": hops}
@@ -165,7 +147,7 @@ def to_dataframe(results: dict) -> pd.DataFrame:
     rows = []
     clamped = 0
     for host, data in results.items():
-        if not data or not data.get("hops"):
+        if not data["hops"]:
             print(f"[{host}] no responsive hops recorded, excluding from plots")
             continue
         dest_ip = data["resolved_ip"]
@@ -200,7 +182,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--input", default=str(REPO_ROOT / "data" / "listed_iperf3_servers.csv"),
-        help="CSV file with the iperf3 server list (columns: IP/HOST, PORT, ...).",
+        help="CSV file with the iperf3 server list (must have an IP/HOST column).",
     )
     parser.add_argument("--count", type=int, default=5, help="Number of random targets to sample.")
     parser.add_argument("--seed", type=int, default=None, help="Random seed, for reproducible runs.")
@@ -230,11 +212,8 @@ def main():
     print(f"Selected {len(chosen)} random target(s): {chosen}")
 
     results = {}
-    for host, port in chosen:
-        breakdown = get_latency_breakdown(
-            host, port, args.max_hops, args.queries, args.wait, args.raw_dir or None
-        )
-        results[host] = {"port": port, **(breakdown or {"resolved_ip": None, "hops": None})}
+    for host in chosen:
+        results[host] = get_latency_breakdown(host, args.max_hops, args.queries, args.wait, args.raw_dir)
 
     with open(args.output, "w") as f:
         json.dump(results, f, indent=2)
