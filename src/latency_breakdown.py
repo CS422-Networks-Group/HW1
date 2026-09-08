@@ -1,26 +1,39 @@
 """
-Latency breakdown (HW1, Q2a).
+Latency breakdown (HW1, Q2 a-c).
 
 Picks 5 random destinations from the iperf3 server list, runs traceroute
 against each, and records the round-trip time to every intermediate hop
 along the path. Non-responsive hops (no RTT samples at all) are filtered
-out of the results.
+out of the results (2a). Then plots a stacked bar chart of the per-hop
+latency breakdown for each destination (2b), and a scatter plot of hop
+count vs. RTT (2c).
 
 Usage:
-    python3 src/latency_breakdown.py \
-        --input data/listed_iperf3_servers.csv \
-        --count 5 \
-        --output latency_breakdown_results.json
+    python3 src/latency_breakdown.py
 """
 
 import argparse
 import csv
 import json
+import os
 import random
 import re
 import shutil
 import socket
 import subprocess
+from pathlib import Path
+
+import pandas as pd
+
+from visualize import plot_hopcount_vs_rtt, plot_latency_breakdown
+
+# Regex for validating IPv4 addresses (used in traceroute output parsing).
+IP_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
+
+# Repo root (parent of src/), independent of the current working directory,
+# so defaults below land in the same place whether you run this from the
+# repo root, from inside src/, or with a full path.
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def parse_port(port_field: str) -> int | None:
@@ -73,6 +86,7 @@ def _parse_traceroute_output(output: str) -> list[dict]:
             continue
         hop_number = int(tokens[0])
 
+        hop_ip = None
         latencies = []
         for i, tok in enumerate(tokens[1:], start=1):
             if tok == "ms":
@@ -80,10 +94,10 @@ def _parse_traceroute_output(output: str) -> list[dict]:
                     latencies.append(float(tokens[i - 1]))
                 except ValueError:
                     pass
-            else:
-                match = re.fullmatch(r"[\d.]+ms", tok)  # tolerate "4.543ms" too
-                if match:
-                    latencies.append(float(tok[:-2]))
+            elif re.fullmatch(r"[\d.]+ms", tok):  # tolerate "4.543ms" too
+                latencies.append(float(tok[:-2]))
+            elif hop_ip is None and IP_RE.match(tok):
+                hop_ip = tok
 
         if not latencies:
             continue  # non-responsive hop: filtered out
@@ -91,6 +105,7 @@ def _parse_traceroute_output(output: str) -> list[dict]:
         hops.append(
             {
                 "hop": hop_number,
+                "ip": hop_ip,
                 "rtts_ms": latencies,
                 "avg_rtt_ms": sum(latencies) / len(latencies),
             }
@@ -122,11 +137,14 @@ def get_latency_breakdown(
     max_hops: int = 30,
     queries: int = 3,
     wait: int = 1,
-) -> list[dict] | None:
+) -> dict | None:
     """
     Use traceroute to get the latency breakdown for a given IP address or hostname.
     Finds the round-trip time from this machine to each intermediate hop along
     the path towards the destination, filtering out non-responsive hops.
+
+    Returns {"resolved_ip": ..., "hops": [...]}, or None if the host couldn't
+    be resolved or traceroute failed outright.
     """
     try:
         resolved_ip = socket.gethostbyname(host)
@@ -147,18 +165,64 @@ def get_latency_breakdown(
         return None
 
     print(f"[{resolved_ip}] {len(hops)} responsive hop(s): {hops}")
-    return hops
+    return {"resolved_ip": resolved_ip, "hops": hops}
+
+
+def to_dataframe(results: dict) -> pd.DataFrame:
+    """
+    Flatten the {host: {resolved_ip, hops: [...]}} results into the shape
+    visualize.py's plotting functions expect: one row per responsive hop,
+    with columns DEST_IP, HOP_NUM, HOP_IP, HOP_RTT.
+
+    HOP_RTT is this hop's *latency contribution*: its RTT minus the RTT of
+    the previous responsive hop (0 for the first one), per the class Q&A on
+    2b. That difference is occasionally negative -- traceroute probes are
+    independent, so RTT can fluctuate hop-to-hop (path changes, MPLS
+    tunnels) even though real link latency can't be negative. Per the
+    instructor's follow-up, that's treated as an exception and clamped to 0
+    for the plotted segment, though the *next* hop's delta is still computed
+    against this hop's real (unclamped) RTT, so later contributions aren't
+    thrown off by the clamp. When hops in between were non-responsive
+    (filtered out already), the delta lands entirely on the next responsive
+    hop, i.e. it's the combined contribution of every skipped hop since the
+    last response.
+    """
+    rows = []
+    for host, data in results.items():
+        if not data or not data.get("hops"):
+            print(f"[{host}] no responsive hops recorded, excluding from plots")
+            continue
+        dest_ip = data["resolved_ip"]
+        prev_rtt = 0.0
+        for hop in sorted(data["hops"], key=lambda h: h["hop"]):
+            rows.append(
+                {
+                    "DEST_IP": dest_ip,
+                    "HOP_NUM": hop["hop"],
+                    "HOP_IP": hop["ip"],
+                    "HOP_RTT": max(0.0, hop["avg_rtt_ms"] - prev_rtt),
+                }
+            )
+            prev_rtt = hop["avg_rtt_ms"]
+    return pd.DataFrame(rows, columns=["DEST_IP", "HOP_NUM", "HOP_IP", "HOP_RTT"])
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--input", default="data/listed_iperf3_servers.csv",
+        "--input", default=str(REPO_ROOT / "data" / "listed_iperf3_servers.csv"),
         help="CSV file with the iperf3 server list (columns: IP/HOST, PORT, ...).",
     )
     parser.add_argument("--count", type=int, default=5, help="Number of random targets to sample.")
     parser.add_argument("--seed", type=int, default=None, help="Random seed, for reproducible runs.")
-    parser.add_argument("--output", default="latency_breakdown_results.json", help="Where to write results as JSON.")
+    parser.add_argument(
+        "--output", default=str(REPO_ROOT / "latency_breakdown_results.json"),
+        help="Where to write results as JSON.",
+    )
+    parser.add_argument(
+        "--plots-dir", default=str(REPO_ROOT / "plots"),
+        help="Directory to write the PDF plots into.",
+    )
     parser.add_argument("--max-hops", type=int, default=30)
     parser.add_argument("--queries", type=int, default=3, help="Probes sent per hop.")
     parser.add_argument("--wait", type=int, default=1, help="Seconds to wait for a probe response.")
@@ -173,14 +237,24 @@ def main():
 
     results = {}
     for host, port in chosen:
-        results[host] = {
-            "port": port,
-            "hops": get_latency_breakdown(host, port, args.max_hops, args.queries, args.wait),
-        }
+        breakdown = get_latency_breakdown(host, port, args.max_hops, args.queries, args.wait)
+        results[host] = {"port": port, **(breakdown or {"resolved_ip": None, "hops": None})}
 
     with open(args.output, "w") as f:
         json.dump(results, f, indent=2)
     print(f"Wrote results to {args.output}")
+
+    df = to_dataframe(results)
+    if df.empty:
+        print("No responsive hops recorded for any target; skipping plots.")
+        return
+
+    os.makedirs(args.plots_dir, exist_ok=True)
+    breakdown_path = os.path.join(args.plots_dir, "latency_breakdown.pdf")
+    hopcount_path = os.path.join(args.plots_dir, "hopcount_vs_rtt.pdf")
+    plot_latency_breakdown(df, breakdown_path)
+    plot_hopcount_vs_rtt(df, hopcount_path)
+    print(f"Wrote {breakdown_path} and {hopcount_path}")
 
 
 if __name__ == "__main__":
