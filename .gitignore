@@ -1,0 +1,7 @@
+.venv
+
+data/ping_results.csv
+
+plots/
+
+*.pyc

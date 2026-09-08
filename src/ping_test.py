@@ -5,12 +5,21 @@ import requests
 import socket
 import ipaddress
 import subprocess
-import IP2Location  
+import IP2Location
 import os
+import re
 from tqdm import tqdm
 import threading
 from requests import get
 from geopy.distance import geodesic
+
+from visualize import get_own_location, plot_distance_vs_rtt
+
+#matches the linux ping summary line, e.g. "rtt min/avg/max/mdev = 12.345/23.456/34.567/5.678 ms"
+RTT_SUMMARY_RE = re.compile(
+    r"(?:rtt|round-trip) min/avg/max/(?:mdev|stddev) = "
+    r"([\d.]+)/([\d.]+)/([\d.]+)/[\d.]+ ms"
+)
 
 #check whether a value is an ip address or a host name
 def is_ip_address(value: str) -> bool:
@@ -59,14 +68,25 @@ def process_csv(csv_file: str) -> pd.DataFrame:
     return filtered_df
 
 
-def execute_ping_tests(df: pd.DataFrame, start: int, end: int, result_df):
-    for _, row in df.iloc[start:end+1].iterrows():
+def execute_ping_tests(df: pd.DataFrame, start: int, end: int):
+    for index, row in df.iloc[start:end+1].iterrows():
         res = subprocess.run(
             ["ping", "-c", "11", row["IP/HOST"]],
             capture_output=True,
             text=True
         )
         print(res.stdout)
+
+        match = RTT_SUMMARY_RE.search(res.stdout)
+        if match:
+            min_rtt, avg_rtt, max_rtt = (float(v) for v in match.groups())
+            df.at[index, "MIN_RTT"] = min_rtt
+            df.at[index, "AVG_RTT"] = avg_rtt
+            df.at[index, "MAX_RTT"] = max_rtt
+        else:
+            df.at[index, "MIN_RTT"] = None
+            df.at[index, "AVG_RTT"] = None
+            df.at[index, "MAX_RTT"] = None
 def main():
     '''
     basic flow: read the csv
@@ -116,6 +136,13 @@ def main():
     thread4.join()
 
     thread5.join()
+
+    print(df[["IP/HOST", "MIN_RTT", "AVG_RTT", "MAX_RTT"]])
+    df.to_csv("data/ping_results.csv", index=False)
+
+    os.makedirs("plots", exist_ok=True)
+    plot_distance_vs_rtt(df, get_own_location(), "plots/distance_vs_rtt.pdf")
+
 
 if __name__ == "__main__":
     main()
