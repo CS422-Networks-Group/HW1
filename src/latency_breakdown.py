@@ -1,15 +1,8 @@
 """
-Latency breakdown (HW1, Q2 a-c).
+Latency breakdown (HW1, Q2 a-c): traceroute 5 random destinations, plot the
+per-hop latency breakdown (2b) and hop count vs. RTT (2c).
 
-Picks 5 random destinations from the iperf3 server list, runs traceroute
-against each, and records the round-trip time to every intermediate hop
-along the path. Non-responsive hops (no RTT samples at all) are filtered
-out of the results (2a). Then plots a stacked bar chart of the per-hop
-latency breakdown for each destination (2b), and a scatter plot of hop
-count vs. RTT (2c).
-
-Usage:
-    python3 src/latency_breakdown.py
+Usage: python3 src/latency_breakdown.py
 """
 
 import argparse
@@ -37,13 +30,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def parse_port(port_field: str) -> int | None:
-    """Parse a PORT field from the server list CSV into a single port number.
-
-    Fields may be blank (use traceroute's default port), a single port
-    ("5201"), or an inclusive range ("9205-9240"). For a range we just use
-    the first port -- traceroute only needs *a* destination port, not the
-    full iperf3 service range.
-    """
+    """Parse a PORT field (blank, "5201", or a range like "9205-9240") into
+    a single port number, using the first port of a range."""
     port_field = (port_field or "").strip()
     if not port_field:
         return None
@@ -71,17 +59,15 @@ def pick_random_targets(
 
 
 def _parse_traceroute_output(output: str) -> list[dict]:
-    """Parse traceroute output into a list of responsive hops.
-
-    A hop line looks like (with -n, so no reverse-DNS names):
-        1  192.168.4.1  4.543 ms  3.727 ms
-    A hop that never replies looks like:
-        2  * *
-    Hops with zero RTT samples are considered non-responsive and dropped.
-    """
+    """Parse `-n` traceroute stdout into responsive hops (e.g. "1  192.168.4.1
+    4.543 ms"), dropping hops with zero RTT samples (e.g. "2  * *")."""
     hops = []
-    for line in output.splitlines()[1:]:  # skip the "traceroute to ..." header
+    for line in output.splitlines():
         tokens = line.split()
+        # tokens[0].isdigit() also skips a header line, if one shows up here --
+        # don't assume it's always on line 0: on this traceroute build the
+        # "traceroute to ... hops max..." header prints to stderr, not stdout,
+        # so slicing off "line 0" here previously discarded hop 1's real data.
         if not tokens or not tokens[0].isdigit():
             continue
         hop_number = int(tokens[0])
@@ -120,6 +106,7 @@ def _run_traceroute(
     max_hops: int,
     queries: int,
     wait: int,
+    raw_path: str | None = None,
 ) -> list[dict]:
     cmd = [traceroute_path, "-n", "-m", str(max_hops), "-q", str(queries), "-w", str(wait)]
     if port is not None:
@@ -128,6 +115,14 @@ def _run_traceroute(
 
     timeout = max_hops * queries * wait + 30
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+
+    if raw_path is not None:
+        # Keep the raw output on disk so re-parsing or spot-checking a hop
+        # never requires re-running the measurement against the real network.
+        os.makedirs(os.path.dirname(raw_path), exist_ok=True)
+        with open(raw_path, "w") as f:
+            f.write(result.stdout)
+
     return _parse_traceroute_output(result.stdout)
 
 
@@ -137,15 +132,10 @@ def get_latency_breakdown(
     max_hops: int = 30,
     queries: int = 3,
     wait: int = 1,
+    raw_dir: str | None = None,
 ) -> dict | None:
-    """
-    Use traceroute to get the latency breakdown for a given IP address or hostname.
-    Finds the round-trip time from this machine to each intermediate hop along
-    the path towards the destination, filtering out non-responsive hops.
-
-    Returns {"resolved_ip": ..., "hops": [...]}, or None if the host couldn't
-    be resolved or traceroute failed outright.
-    """
+    """Traceroute `host`, filtering out non-responsive hops. Returns
+    {"resolved_ip": ..., "hops": [...]}, or None on failure."""
     try:
         resolved_ip = socket.gethostbyname(host)
     except socket.gaierror as e:
@@ -157,9 +147,10 @@ def get_latency_breakdown(
     if not traceroute_path:
         raise EnvironmentError("traceroute command is not available on this system.")
 
+    raw_path = os.path.join(raw_dir, f"{resolved_ip}.txt") if raw_dir else None
     print(f"[{resolved_ip}] running traceroute...")
     try:
-        hops = _run_traceroute(traceroute_path, resolved_ip, port, max_hops, queries, wait)
+        hops = _run_traceroute(traceroute_path, resolved_ip, port, max_hops, queries, wait, raw_path)
     except Exception as e:
         print(f"[{resolved_ip}] traceroute failed: {e}")
         return None
@@ -169,25 +160,10 @@ def get_latency_breakdown(
 
 
 def to_dataframe(results: dict) -> pd.DataFrame:
-    """
-    Flatten the {host: {resolved_ip, hops: [...]}} results into the shape
-    visualize.py's plotting functions expect: one row per responsive hop,
-    with columns DEST_IP, HOP_NUM, HOP_IP, HOP_RTT.
-
-    HOP_RTT is this hop's *latency contribution*: its RTT minus the RTT of
-    the previous responsive hop (0 for the first one), per the class Q&A on
-    2b. That difference is occasionally negative -- traceroute probes are
-    independent, so RTT can fluctuate hop-to-hop (path changes, MPLS
-    tunnels) even though real link latency can't be negative. Per the
-    instructor's follow-up, that's treated as an exception and clamped to 0
-    for the plotted segment, though the *next* hop's delta is still computed
-    against this hop's real (unclamped) RTT, so later contributions aren't
-    thrown off by the clamp. When hops in between were non-responsive
-    (filtered out already), the delta lands entirely on the next responsive
-    hop, i.e. it's the combined contribution of every skipped hop since the
-    last response.
-    """
+    """Flatten {host: {resolved_ip, hops: [...]}} into one row per responsive
+    hop (DEST_IP, HOP_NUM, HOP_IP, HOP_RTT) for visualize.py's plots."""
     rows = []
+    clamped = 0
     for host, data in results.items():
         if not data or not data.get("hops"):
             print(f"[{host}] no responsive hops recorded, excluding from plots")
@@ -195,15 +171,28 @@ def to_dataframe(results: dict) -> pd.DataFrame:
         dest_ip = data["resolved_ip"]
         prev_rtt = 0.0
         for hop in sorted(data["hops"], key=lambda h: h["hop"]):
+            # HOP_RTT = this hop's RTT minus the previous responsive hop's (per
+            # class Q&A on 2b); occasionally negative from probe jitter/path
+            # changes, clamped to 0 per the instructor's follow-up, though the
+            # *next* delta still uses this hop's real, unclamped RTT.
+            delta = hop["avg_rtt_ms"] - prev_rtt
+            if delta < 0:
+                clamped += 1
             rows.append(
                 {
                     "DEST_IP": dest_ip,
                     "HOP_NUM": hop["hop"],
                     "HOP_IP": hop["ip"],
-                    "HOP_RTT": max(0.0, hop["avg_rtt_ms"] - prev_rtt),
+                    "HOP_RTT": max(0.0, delta),
                 }
             )
             prev_rtt = hop["avg_rtt_ms"]
+
+    if clamped:
+        print(
+            f"Clamped {clamped} negative hop-to-hop RTT delta(s) to 0 out of {len(rows)} "
+            "responsive hops (path changes / MPLS tunnels / probe jitter -- see to_dataframe's comments)."
+        )
     return pd.DataFrame(rows, columns=["DEST_IP", "HOP_NUM", "HOP_IP", "HOP_RTT"])
 
 
@@ -223,6 +212,11 @@ def main():
         "--plots-dir", default=str(REPO_ROOT / "plots"),
         help="Directory to write the PDF plots into.",
     )
+    parser.add_argument(
+        "--raw-dir", default=str(REPO_ROOT / "traceroute_raw"),
+        help="Directory to save each target's raw traceroute output into, so re-parsing "
+             "never requires re-running the measurement. Pass '' to skip saving it.",
+    )
     parser.add_argument("--max-hops", type=int, default=30)
     parser.add_argument("--queries", type=int, default=3, help="Probes sent per hop.")
     parser.add_argument("--wait", type=int, default=1, help="Seconds to wait for a probe response.")
@@ -237,7 +231,9 @@ def main():
 
     results = {}
     for host, port in chosen:
-        breakdown = get_latency_breakdown(host, port, args.max_hops, args.queries, args.wait)
+        breakdown = get_latency_breakdown(
+            host, port, args.max_hops, args.queries, args.wait, args.raw_dir or None
+        )
         results[host] = {"port": port, **(breakdown or {"resolved_ip": None, "hops": None})}
 
     with open(args.output, "w") as f:
