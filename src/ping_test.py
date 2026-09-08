@@ -1,4 +1,5 @@
 import argparse
+import math
 import subprocess
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -10,7 +11,7 @@ import IP2Location
 import os
 import re
 from tqdm import tqdm
-import threading
+from concurrent.futures import ThreadPoolExecutor
 from requests import get
 from geopy.distance import geodesic
 
@@ -151,18 +152,17 @@ def main():
         result_df.loc[index,"DISTANCE"] = geodesic(home_ip, dest_ip).miles
 
     num_rows = df.shape[0]
-    num_threads = max(1, min(args.threads, num_rows)) if num_rows else 0
-    threads = []
-    if num_threads:
-        chunk_size = -(-num_rows // num_threads)  # ceiling division
-        for start in range(0, num_rows, chunk_size):
-            end = min(start + chunk_size, num_rows) - 1
-            threads.append(threading.Thread(target=execute_ping_tests, args=(df, start, end)))
-
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
+    if num_rows:
+        num_threads = max(1, min(args.threads, num_rows))
+        chunk_size = math.ceil(num_rows / num_threads)
+        chunk_bounds = (
+            (start, min(start + chunk_size, num_rows) - 1)
+            for start in range(0, num_rows, chunk_size)
+        )
+        with ThreadPoolExecutor(max_workers=num_threads) as executor:
+            futures = [executor.submit(execute_ping_tests, df, start, end) for start, end in chunk_bounds]
+            for future in futures:
+                future.result()
 
     print(df[["IP/HOST", "MIN_RTT", "AVG_RTT", "MAX_RTT"]])
     os.makedirs(os.path.dirname(args.output_csv) or ".", exist_ok=True)
