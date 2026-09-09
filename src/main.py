@@ -99,52 +99,51 @@ def execute_ping_tests(df: pd.DataFrame, start: int, end: int):
             df.at[index, "AVG_RTT"] = None
             df.at[index, "MAX_RTT"] = None
 
-def execute_traceroute_tests(ip_addresses: list) -> pd.DataFrame:
+def execute_traceroute_test(ip_addr: str, results: list) -> None:
+    print(f"Run traceroute test for {ip_addr}...")
+    try:
+        res = subprocess.run(
+            ["traceroute", "-I", ip_addr],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+    except subprocess.TimeoutExpired:
+        print(f"[{ip_addr}] traceroute timed out, skipping")
+        return
+
+    print(res.stdout)
+
     rows = []
-    for ip_addr in ip_addresses:
-        print("Run traceroute tests...")
-        try:
-            res = subprocess.run(
-                ["traceroute", "-I", ip_addr],
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-        except subprocess.TimeoutExpired:
-            print(f"[{ip_addr}] traceroute timed out, skipping")
+    prev_rtt = 0.0
+    for line in res.stdout.splitlines()[1:]:  # skip "traceroute to ..." header
+        hop_match = TRACEROUTE_HOP_RE.match(line)
+        if not hop_match:
             continue
+        hop_num = int(hop_match.group(1))
+        rest = hop_match.group(2)
 
-        print(res.stdout)
+        #converts each matching string to a float for processing
+        rtts = [float(v) for v in TRACEROUTE_RTT_RE.findall(rest)]
+        if not rtts:
+            continue  # unresponsive hop ("* * *")
 
-        prev_rtt = 0.0
-        for line in res.stdout.splitlines()[1:]:  # skip "traceroute to ..." header
-            hop_match = TRACEROUTE_HOP_RE.match(line)
-            if not hop_match:
-                continue
-            hop_num = int(hop_match.group(1))
-            rest = hop_match.group(2)
+        raw_rtt = sum(rtts) / len(rtts)
+        hop_rtt = max(raw_rtt - prev_rtt, 0.0)  # clamp decreases to 0 (edge cases around later hops taking less time)
+        prev_rtt = raw_rtt
 
-            #converts each matching string to a float for processing
-            rtts = [float(v) for v in TRACEROUTE_RTT_RE.findall(rest)]
-            if not rtts:
-                continue  # unresponsive hop ("* * *")
-
-            raw_rtt = sum(rtts) / len(rtts)
-            hop_rtt = max(raw_rtt - prev_rtt, 0.0)  # clamp decreases to 0 (edge cases around later hops taking less time)
-            prev_rtt = raw_rtt
-
-            rows.append({
-                "DEST_IP": ip_addr,
-                "HOP_NUM": hop_num,
-                "HOP_RTT": hop_rtt,
-            })
-
-    return pd.DataFrame(rows, columns=["DEST_IP", "HOP_NUM", "HOP_RTT"])
+        rows.append({
+            "DEST_IP": ip_addr,
+            "HOP_NUM": hop_num,
+            "HOP_RTT": hop_rtt,
+        })
+        
+    results.extend(rows)
 
         
 
 def get_random_ip_addresses(df: pd.DataFrame) -> list:
-    random_rows = df.sample(n=5)
+    random_rows = df.sample(n=5)    
     ip_addresses = []
     for _, row in random_rows.iterrows():
         ip_addresses.append(row["IP/HOST"])
@@ -196,19 +195,6 @@ def main():
 
     # Process the csv file and prepare the intermediate dataframe for processing
     df = process_csv(args.input_csv)
-    result_df = pd.DataFrame(index=range(df.shape[0]), columns=df.columns)
-    result_df["IP_ADDRESS"] = None
-    result_df["MIN RTT"] = None
-    result_df["MAX RTT"] = None
-    result_df["AVERAGE RTT"] = None
-    result_df["DISTANCE"] = None
-
-    #Loop through the dataframe and populate the new dataframe with distance and time metrics for each ip address
-    for index, row in df.iterrows():
-        result_df.loc[index,"IP_ADDRESS"] = row["IP/HOST"]
-        home_ip = (df.iloc[-1]["LATITUDE"], df.iloc[-1]["LONGITUDE"])
-        dest_ip = (row["LATITUDE"], row["LONGITUDE"])
-        result_df.loc[index,"DISTANCE"] = geodesic(home_ip, dest_ip).miles
     
     num_rows = df.shape[0]
     if num_rows:
@@ -230,9 +216,19 @@ def main():
     os.makedirs(os.path.dirname(args.plot_output) or ".", exist_ok=True)
     plot_distance_vs_rtt(df, get_own_location(), args.plot_output)
 
+    #concurrency for traceroute to prevent long execution times 
     ip_addresses = get_random_ip_addresses(df)
-    traceroute_df = execute_traceroute_tests(ip_addresses)
+    traceroute_rows = []
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = [
+            executor.submit(execute_traceroute_test, ip_addr, traceroute_rows)
+            for ip_addr in ip_addresses
+        ]
+        for future in futures:
+            future.result()
 
+    traceroute_df = pd.DataFrame(traceroute_rows, columns=["DEST_IP", "HOP_NUM", "HOP_RTT"])
+    
     os.makedirs(os.path.dirname(args.latency_breakdown_output) or ".", exist_ok=True)
     plot_latency_breakdown(traceroute_df, args.latency_breakdown_output)
 
