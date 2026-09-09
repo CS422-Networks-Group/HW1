@@ -50,12 +50,9 @@ def _parse_traceroute_output(output: str) -> list[dict]:
     4.543 ms"), dropping hops with zero RTT samples (e.g. "2  * *")."""
     hops = []
     for line in output.splitlines():
-        tokens = line.split()
-        # tokens[0].isdigit() also skips a header line, if one shows up here --
-        # don't assume it's always on line 0: on this traceroute build the
-        # "traceroute to ... hops max..." header prints to stderr, not stdout,
-        # so slicing off "line 0" here previously discarded hop 1's real data.
+        tokens = line.split()   # Split traceroute output by spaces
         if not tokens or not tokens[0].isdigit():
+            # Edge case where a line isn't a hop.
             continue
         hop_number = int(tokens[0])
 
@@ -145,7 +142,6 @@ def to_dataframe(results: dict) -> pd.DataFrame:
     """Flatten {host: {resolved_ip, hops: [...]}} into one row per responsive
     hop (DEST_IP, HOP_NUM, HOP_IP, HOP_RTT) for visualize.py's plots."""
     rows = []
-    clamped = 0
     for host, data in results.items():
         if not data["hops"]:
             print(f"[{host}] no responsive hops recorded, excluding from plots")
@@ -153,13 +149,8 @@ def to_dataframe(results: dict) -> pd.DataFrame:
         dest_ip = data["resolved_ip"]
         prev_rtt = 0.0
         for hop in sorted(data["hops"], key=lambda h: h["hop"]):
-            # HOP_RTT = this hop's RTT minus the previous responsive hop's (per
-            # class Q&A on 2b); occasionally negative from probe jitter/path
-            # changes, clamped to 0 per the instructor's follow-up, though the
-            # *next* delta still uses this hop's real, unclamped RTT.
+            # We're setting negative deltas to 0 here; this is an edge case
             delta = hop["avg_rtt_ms"] - prev_rtt
-            if delta < 0:
-                clamped += 1
             rows.append(
                 {
                     "DEST_IP": dest_ip,
@@ -170,11 +161,6 @@ def to_dataframe(results: dict) -> pd.DataFrame:
             )
             prev_rtt = hop["avg_rtt_ms"]
 
-    if clamped:
-        print(
-            f"Clamped {clamped} negative hop-to-hop RTT delta(s) to 0 out of {len(rows)} "
-            "responsive hops (path changes / MPLS tunnels / probe jitter -- see to_dataframe's comments)."
-        )
     return pd.DataFrame(rows, columns=["DEST_IP", "HOP_NUM", "HOP_IP", "HOP_RTT"])
 
 
