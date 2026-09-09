@@ -40,9 +40,10 @@ def load_targets(csv_path: str) -> list[str]:
     return targets
 
 
-def pick_random_targets(targets: list[str], count: int, seed: int | None = None) -> list[str]:
-    rng = random.Random(seed)
-    return rng.sample(targets, k=min(count, len(targets)))
+def pick_random_targets(targets: list[str], count: int = 5) -> list[str]:
+    """Sample `count` random targets, seeded from the system (i.e. genuinely
+    random each run -- the assignment calls for 5 random destinations)."""
+    return random.sample(targets, k=min(count, len(targets)))
 
 
 def _parse_traceroute_output(output: str) -> list[dict]:
@@ -170,8 +171,6 @@ def main():
         "--input", default=str(REPO_ROOT / "data" / "listed_iperf3_servers.csv"),
         help="CSV file with the iperf3 server list (must have an IP/HOST column).",
     )
-    parser.add_argument("--count", type=int, default=5, help="Number of random targets to sample.")
-    parser.add_argument("--seed", type=int, default=None, help="Random seed, for reproducible runs.")
     parser.add_argument(
         "--output", default=str(REPO_ROOT / "latency_breakdown_results.json"),
         help="Where to write results as JSON.",
@@ -194,7 +193,7 @@ def main():
     if not targets:
         raise SystemExit(f"No targets found in {args.input}")
 
-    chosen = pick_random_targets(targets, args.count, args.seed)
+    chosen = pick_random_targets(targets)
     print(f"Selected {len(chosen)} random target(s): {chosen}")
 
     results = {}
