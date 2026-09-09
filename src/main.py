@@ -21,7 +21,8 @@ RTT_SUMMARY_RE = re.compile(
     r"([\d.]+)/([\d.]+)/([\d.]+)/[\d.]+ ms"
 )
 
-#matches a traceroute hop line, e.g. " 3  192.0.2.1 (192.0.2.1)  12.345 ms  12.1 ms  11.9 ms"
+#matches a traceroute hop line (run with -n, so no reverse-DNS names),
+#e.g. " 3  192.0.2.1  12.345 ms  12.1 ms  11.9 ms"
 TRACEROUTE_HOP_RE = re.compile(r"^\s*(\d+)\s+(.*)$")
 
 #pulls each rtt probe off a hop line, e.g. "12.345 ms"
@@ -99,24 +100,44 @@ def execute_ping_tests(df: pd.DataFrame, start: int, end: int):
             df.at[index, "AVG_RTT"] = None
             df.at[index, "MAX_RTT"] = None
 
-def execute_traceroute_test(ip_addr: str, results: list) -> None:
+def execute_traceroute_test(ip_addr: str, results: list, raw_dir: str = "") -> int:
+    '''
+    Traceroutes ip_addr, appends one row per responsive hop (DEST_IP, HOP_NUM,
+    HOP_RTT) to the shared `results` list, and returns how many negative
+    hop-to-hop RTT deltas got clamped to 0 (path changes / MPLS tunnels /
+    probe jitter can make a later hop's RTT sample lower than an earlier
+    one, even though real link latency can't be negative).
+    '''
     print(f"Run traceroute test for {ip_addr}...")
     try:
         res = subprocess.run(
-            ["traceroute", "-I", ip_addr],
+            ["traceroute", "-n", "-I", ip_addr],
             capture_output=True,
             text=True,
             timeout=300,
         )
     except subprocess.TimeoutExpired:
         print(f"[{ip_addr}] traceroute timed out, skipping")
-        return
+        return 0
 
     print(res.stdout)
 
+    if raw_dir:
+        # Keep the raw output on disk so re-parsing or spot-checking a hop
+        # never requires re-running the measurement against the real network.
+        os.makedirs(raw_dir, exist_ok=True)
+        with open(os.path.join(raw_dir, f"{ip_addr}.txt"), "w") as f:
+            f.write(res.stdout)
+
     rows = []
     prev_rtt = 0.0
-    for line in res.stdout.splitlines()[1:]:  # skip "traceroute to ..." header
+    clamp_count = 0
+    # Don't assume the first stdout line is the "traceroute to ..." header and
+    # slice it off -- on some traceroute builds that header prints to stderr,
+    # not stdout, which would silently drop hop 1's real data. TRACEROUTE_HOP_RE
+    # already only matches lines that start with a hop number, so no slicing
+    # is needed to filter the header out.
+    for line in res.stdout.splitlines():
         hop_match = TRACEROUTE_HOP_RE.match(line)
         if not hop_match:
             continue
@@ -129,7 +150,10 @@ def execute_traceroute_test(ip_addr: str, results: list) -> None:
             continue  # unresponsive hop ("* * *")
 
         raw_rtt = sum(rtts) / len(rtts)
-        hop_rtt = max(raw_rtt - prev_rtt, 0.0)  # clamp decreases to 0 (edge cases around later hops taking less time)
+        hop_rtt = raw_rtt - prev_rtt
+        if hop_rtt < 0:
+            clamp_count += 1
+            hop_rtt = 0.0  # clamp decreases to 0 (edge cases above)
         prev_rtt = raw_rtt
 
         rows.append({
@@ -137,10 +161,10 @@ def execute_traceroute_test(ip_addr: str, results: list) -> None:
             "HOP_NUM": hop_num,
             "HOP_RTT": hop_rtt,
         })
-        
-    results.extend(rows)
 
-        
+    results.extend(rows)
+    return clamp_count
+
 
 def get_random_ip_addresses(df: pd.DataFrame) -> list:
     random_rows = df.sample(n=5)    
@@ -182,6 +206,13 @@ def parse_args():
         help="Path to write the hop count vs. RTT plot to (default: plots/hopcount_vs_rtt.pdf).",
     )
     parser.add_argument(
+        "--raw-dir",
+        default="traceroute_raw",
+        help="Directory to save each target's raw traceroute output into, so re-parsing or "
+             "spot-checking a hop never requires re-running the measurement. Pass '' to skip "
+             "saving it (default: traceroute_raw).",
+    )
+    parser.add_argument(
         "--threads",
         type=int,
         default=5,
@@ -216,19 +247,25 @@ def main():
     os.makedirs(os.path.dirname(args.plot_output) or ".", exist_ok=True)
     plot_distance_vs_rtt(df, get_own_location(), args.plot_output)
 
-    #concurrency for traceroute to prevent long execution times 
+    #concurrency for traceroute to prevent long execution times
     ip_addresses = get_random_ip_addresses(df)
     traceroute_rows = []
     with ThreadPoolExecutor(max_workers=5) as executor:
         futures = [
-            executor.submit(execute_traceroute_test, ip_addr, traceroute_rows)
+            executor.submit(execute_traceroute_test, ip_addr, traceroute_rows, args.raw_dir)
             for ip_addr in ip_addresses
         ]
-        for future in futures:
-            future.result()
+        clamped_total = sum(future.result() for future in futures)
+
+    if clamped_total:
+        print(
+            f"Clamped {clamped_total} negative hop-to-hop RTT delta(s) to 0 out of "
+            f"{len(traceroute_rows)} responsive hops (path changes / MPLS tunnels / probe "
+            "jitter -- see execute_traceroute_test's comments)."
+        )
 
     traceroute_df = pd.DataFrame(traceroute_rows, columns=["DEST_IP", "HOP_NUM", "HOP_RTT"])
-    
+
     os.makedirs(os.path.dirname(args.latency_breakdown_output) or ".", exist_ok=True)
     plot_latency_breakdown(traceroute_df, args.latency_breakdown_output)
 
