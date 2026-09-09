@@ -32,7 +32,7 @@ point of this assignment is measuring *your* real network path.
 
 3. **Run a script**, e.g.:
    ```bash
-   python src/ping_test.py <YOUR-INPUT-FILE-HERE>
+   python src/main.py <YOUR-INPUT-FILE-HERE>
    python src/latency_breakdown.py --input data/listed_iperf3_servers.csv
    ```
 
