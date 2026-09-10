@@ -65,6 +65,8 @@ consistent for everyone else.
 
 **Troubleshooting:** `main.py` runs traceroute with `-I` (ICMP probes), since some campus/university networks filter UDP probes (traceroute's default). If a trace never leaves private address space (`10.x`, `172.16-31.x`, `192.168.x`) or times out on every hop, try `traceroute <host>` (UDP) by hand to compare — if one gets through and the other doesn't, that's itself worth mentioning in the report.
 
+**Note on 2b vs. 2c:** the script traceroutes *every* destination in the input file (2c needs a data point per destination), and each target's raw output is cached to `--raw-dir` (`traceroute_raw/` by default) so re-running the script doesn't re-measure a host it's already traced — delete that file, or the whole directory, to force a fresh measurement. 2b's stacked bar then samples 5 random destinations out of that same already-collected data, rather than tracing a separate 5.
+
 ## Report
 
 - Include a GitHub/GitLab link in the report, with links or line ranges to the relevant code sections (e.g., a specific function or class).

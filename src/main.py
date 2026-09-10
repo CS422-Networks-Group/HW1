@@ -1,5 +1,6 @@
 import argparse
 import math
+import random
 import subprocess
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -107,27 +108,43 @@ def execute_traceroute_test(ip_addr: str, results: list, raw_dir: str = "") -> i
     hop-to-hop RTT deltas got clamped to 0 (path changes / MPLS tunnels /
     probe jitter can make a later hop's RTT sample lower than an earlier
     one, even though real link latency can't be negative).
+
+    If raw_dir is given and a cached raw-output file for ip_addr already
+    exists there (from a previous run), reuses it instead of re-running
+    traceroute against the network -- with ~190 targets, re-measuring
+    everyone on every run gets expensive fast. Delete the file (or the
+    whole raw_dir) to force a fresh measurement for that host. A run that
+    timed out isn't cached, so it's retried next time.
     '''
-    print(f"Run traceroute test for {ip_addr}...")
-    try:
-        res = subprocess.run(
-            ["traceroute", "-n", "-I", ip_addr],
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
-    except subprocess.TimeoutExpired:
-        print(f"[{ip_addr}] traceroute timed out, skipping")
-        return 0
+    raw_path = os.path.join(raw_dir, f"{ip_addr}.txt") if raw_dir else ""
 
-    print(res.stdout)
+    if raw_path and os.path.exists(raw_path):
+        print(f"[{ip_addr}] using cached traceroute output from {raw_path}")
+        with open(raw_path) as f:
+            stdout = f.read()
+    else:
+        print(f"Run traceroute test for {ip_addr}...")
+        try:
+            res = subprocess.run(
+                ["traceroute", "-n", "-I", ip_addr],
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+        except subprocess.TimeoutExpired:
+            print(f"[{ip_addr}] traceroute timed out, skipping")
+            return 0
 
-    if raw_dir:
-        # Keep the raw output on disk so re-parsing or spot-checking a hop
-        # never requires re-running the measurement against the real network.
-        os.makedirs(raw_dir, exist_ok=True)
-        with open(os.path.join(raw_dir, f"{ip_addr}.txt"), "w") as f:
-            f.write(res.stdout)
+        stdout = res.stdout
+        print(stdout)
+
+        if raw_path:
+            # Keep the raw output on disk so re-parsing or spot-checking a hop
+            # never requires re-running the measurement against the real
+            # network -- and so a later run can skip this host entirely.
+            os.makedirs(raw_dir, exist_ok=True)
+            with open(raw_path, "w") as f:
+                f.write(stdout)
 
     rows = []
     prev_rtt = 0.0
@@ -137,7 +154,7 @@ def execute_traceroute_test(ip_addr: str, results: list, raw_dir: str = "") -> i
     # not stdout, which would silently drop hop 1's real data. TRACEROUTE_HOP_RE
     # already only matches lines that start with a hop number, so no slicing
     # is needed to filter the header out.
-    for line in res.stdout.splitlines():
+    for line in stdout.splitlines():
         hop_match = TRACEROUTE_HOP_RE.match(line)
         if not hop_match:
             continue
@@ -164,14 +181,6 @@ def execute_traceroute_test(ip_addr: str, results: list, raw_dir: str = "") -> i
 
     results.extend(rows)
     return clamp_count
-
-
-def get_random_ip_addresses(df: pd.DataFrame) -> list:
-    random_rows = df.sample(n=5)    
-    ip_addresses = []
-    for _, row in random_rows.iterrows():
-        ip_addresses.append(row["IP/HOST"])
-    return ip_addresses
 
 
 def parse_args():
@@ -248,7 +257,7 @@ def main():
     plot_distance_vs_rtt(df, get_own_location(), args.plot_output)
 
     #concurrency for traceroute to prevent long execution times
-    ip_addresses = get_random_ip_addresses(df)
+    ip_addresses = df["IP/HOST"].tolist()
     traceroute_rows = []
     with ThreadPoolExecutor(max_workers=5) as executor:
         futures = [
@@ -266,9 +275,18 @@ def main():
 
     traceroute_df = pd.DataFrame(traceroute_rows, columns=["DEST_IP", "HOP_NUM", "HOP_RTT"])
 
-    os.makedirs(os.path.dirname(args.latency_breakdown_output) or ".", exist_ok=True)
-    plot_latency_breakdown(traceroute_df, args.latency_breakdown_output)
+    # 2b wants the breakdown for 5 random destinations specifically -- sample
+    # those out of the full traceroute run above rather than measuring them
+    # separately, so every host only ever gets traced once. Sample only from
+    # destinations that actually got responsive-hop data back.
+    responsive_ips = traceroute_df["DEST_IP"].unique().tolist()
+    sample_ips = random.sample(responsive_ips, k=min(5, len(responsive_ips)))
+    breakdown_df = traceroute_df[traceroute_df["DEST_IP"].isin(sample_ips)]
 
+    os.makedirs(os.path.dirname(args.latency_breakdown_output) or ".", exist_ok=True)
+    plot_latency_breakdown(breakdown_df, args.latency_breakdown_output)
+
+    # 2c wants every destination IP.
     os.makedirs(os.path.dirname(args.hopcount_rtt_output) or ".", exist_ok=True)
     plot_hopcount_vs_rtt(traceroute_df, args.hopcount_rtt_output)
 
