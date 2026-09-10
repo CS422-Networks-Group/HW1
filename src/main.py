@@ -224,8 +224,8 @@ def parse_args():
     parser.add_argument(
         "--threads",
         type=int,
-        default=5,
-        help="Number of worker threads to split the ping tests across (default: 5).",
+        default=100,
+        help="Number of worker threads to split the ping tests across (default: 100).",
     )
 
     return parser.parse_args()
