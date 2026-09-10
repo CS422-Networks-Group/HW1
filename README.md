@@ -22,12 +22,13 @@ point of this assignment is measuring *your* real network path.
    git clone <REPOSITORY-URL>
    ```
 
-2. **Create and install the virtual environment** (creates `.venv/`, installs
-   `requirements.txt` into it, using the Python version pinned in
-   `.python-version`)
+2. **Create and install the virtual environment**, using the Python version
+   pinned in `.python-version`
    ```bash
-   make install
+   python3.14 -m venv .venv
    source .venv/bin/activate
+   pip install --upgrade pip
+   pip install -r requirements.txt
    ```
 
 3. **Run the script**, e.g.:
