@@ -37,7 +37,7 @@ def is_ip_address(value: str) -> bool:
     except ValueError:
         return False
 
-#processing the csv for use by the functiosn
+#processing the csv for use by the functions
 def process_csv(csv_file: str) -> pd.DataFrame:
     #read the csv
     df = pd.read_csv(csv_file)
