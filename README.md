@@ -22,19 +22,21 @@ point of this assignment is measuring *your* real network path.
    git clone <REPOSITORY-URL>
    ```
 
-2. **Create and install the virtual environment** (creates `.venv/`, installs
-   `requirements.txt` into it, using the Python version pinned in
-   `.python-version`)
+2. **Create and install the virtual environment**, using the Python version
+   pinned in `.python-version`
    ```bash
-   make install
+   python3.14 -m venv .venv
    source .venv/bin/activate
+   pip install --upgrade pip
+   pip install -r requirements.txt
    ```
 
-3. **Run a script**, e.g.:
+3. **Run the script**, e.g.:
    ```bash
    python src/main.py <YOUR-INPUT-FILE-HERE>
-   python src/latency_breakdown.py --input data/listed_iperf3_servers.csv
    ```
+   This runs the ping tests (Q1) and the traceroute latency breakdown (Q2)
+   in one shot, writing the results CSV and all PDF plots.
 
 If you add a new dependency, install it inside the activated venv and pin
 the exact version in `requirements.txt` (e.g. via `pip freeze`) so it stays
@@ -62,7 +64,9 @@ consistent for everyone else.
 
 **Note:** It's fine to skip non-responsive servers (your script should handle it). You may see `*` in traceroute output, meaning the hop isn't responding to ICMP — that's fine as long as the traceroute completes with the final destination responding. Otherwise, traceroute will time out and the script should mark it non-responsive.
 
-**Troubleshooting:** `latency_breakdown.py` uses UDP probes (traceroute's default), which some campus/university networks filter. If a trace never leaves private address space (`10.x`, `172.16-31.x`, `192.168.x`) or times out on every hop, try `sudo traceroute -I <host>` (ICMP probes) by hand to check whether that's the cause — if ICMP gets through and UDP doesn't, that's itself worth mentioning in the report.
+**Troubleshooting:** `main.py` runs traceroute with `-I` (ICMP probes), since some campus/university networks filter UDP probes (traceroute's default). If a trace never leaves private address space (`10.x`, `172.16-31.x`, `192.168.x`) or times out on every hop, try `traceroute <host>` (UDP) by hand to compare — if one gets through and the other doesn't, that's itself worth mentioning in the report.
+
+**Note on 2b vs. 2c:** the script traceroutes *every* destination in the input file (2c needs a data point per destination), and each target's raw output is cached to `--raw-dir` (`traceroute_raw/` by default) so re-running the script doesn't re-measure a host it's already traced — delete that file, or the whole directory, to force a fresh measurement. 2b's stacked bar then samples 5 random destinations out of that same already-collected data, rather than tracing a separate 5.
 
 ## Report
 

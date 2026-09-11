@@ -5,5 +5,4 @@ pandas==3.0.5
 matplotlib==3.10.6
 requests==2.34.2
 IP2Location==8.11.0
-tqdm==4.70.0
 geopy==2.5.0
