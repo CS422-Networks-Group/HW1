@@ -1,6 +1,8 @@
-pandas
-matplotlib
-requests
-IP2Location
-tqdm
-geopy
+# Pin exact versions here so all three of us run identical code.
+# Add new deps with `pip freeze` (or `pip install pkg==x.y.z` by hand) so
+# the pin always matches what's actually installed.
+pandas==3.0.5
+matplotlib==3.10.6
+requests==2.34.2
+IP2Location==8.11.0
+geopy==2.5.0
