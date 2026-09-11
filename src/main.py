@@ -171,7 +171,7 @@ def execute_traceroute_test(ip_addr: str, results: list, raw_dir: str = "") -> i
         if hop_rtt < 0:
             clamp_count += 1
             hop_rtt = 0.0  # clamp decreases to 0 (edge cases above)
-        prev_rtt = raw_rtt
+        prev_rtt += hop_rtt
 
         rows.append({
             "DEST_IP": ip_addr,
