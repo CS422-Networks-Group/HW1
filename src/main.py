@@ -101,19 +101,21 @@ def execute_ping_tests(df: pd.DataFrame, start: int, end: int):
             df.at[index, "AVG_RTT"] = None
             df.at[index, "MAX_RTT"] = None
 
-def execute_traceroute_test(ip_addr: str, results: list, raw_dir: str = "") -> int:
+def execute_traceroute_test(df: pd.DataFrame, start: int, end: int, raw_dir: str) -> None:
     '''
-    Traceroutes ip_addr, appends one row per responsive hop to `results`, and
-    returns how many negative hop-to-hop RTT deltas got clamped to 0. Reuses a
-    cached raw-output file under raw_dir when present instead of re-measuring.
+    Traceroutes each IP in df.iloc[start:end+1] and caches its raw output at
+    {raw_dir}/{ip}.txt (skipping hosts already cached there). Writing straight
+    to a per-IP file, rather than a shared in-memory structure, keeps threads
+    from ever touching each other's output.
     '''
-    raw_path = os.path.join(raw_dir, f"{ip_addr}.txt") if raw_dir else ""
+    for _, row in df.iloc[start:end+1].iterrows():
+        ip_addr = row["IP/HOST"]
+        raw_path = os.path.join(raw_dir, f"{ip_addr}.txt")
 
-    if raw_path and os.path.exists(raw_path):
-        print(f"[{ip_addr}] using cached traceroute output from {raw_path}")
-        with open(raw_path) as f:
-            stdout = f.read()
-    else:
+        if os.path.exists(raw_path):
+            print(f"[{ip_addr}] using cached traceroute output from {raw_path}")
+            continue
+
         print(f"Run traceroute test for {ip_addr}...")
         try:
             res = subprocess.run(
@@ -124,16 +126,24 @@ def execute_traceroute_test(ip_addr: str, results: list, raw_dir: str = "") -> i
             )
         except subprocess.TimeoutExpired:
             print(f"[{ip_addr}] traceroute timed out, skipping")
-            return 0
+            continue
 
-        stdout = res.stdout
-        print(stdout)
-
-        if raw_path and res.returncode == 0:
-            # Cache the raw output so later runs can skip re-measuring this host.
+        print(res.stdout)
+        if res.returncode == 0:
             os.makedirs(raw_dir, exist_ok=True)
             with open(raw_path, "w") as f:
-                f.write(stdout)
+                f.write(res.stdout)
+
+def parse_traceroute_output(ip_addr: str, raw_dir: str) -> tuple[list[dict], int]:
+    '''
+    Parses {raw_dir}/{ip}.txt into one row per responsive hop, and returns how
+    many negative hop-to-hop RTT deltas got clamped to 0.
+    '''
+    raw_path = os.path.join(raw_dir, f"{ip_addr}.txt")
+    if not os.path.exists(raw_path):
+        return [], 0
+    with open(raw_path) as f:
+        stdout = f.read()
 
     rows = []
     prev_rtt = 0.0
@@ -164,8 +174,7 @@ def execute_traceroute_test(ip_addr: str, results: list, raw_dir: str = "") -> i
             "HOP_RTT": hop_rtt,
         })
 
-    results.extend(rows)
-    return clamp_count
+    return rows, clamp_count
 
 
 def parse_args():
@@ -202,15 +211,15 @@ def parse_args():
     parser.add_argument(
         "--raw-dir",
         default="traceroute_raw",
-        help="Directory to save each target's raw traceroute output into, so re-parsing or "
-             "spot-checking a hop never requires re-running the measurement. Pass '' to skip "
-             "saving it (default: traceroute_raw).",
+        help="Directory each target's raw traceroute output is cached into (one file per IP), "
+             "then parsed from -- so re-parsing or spot-checking a hop never requires re-running "
+             "the measurement (default: traceroute_raw).",
     )
     parser.add_argument(
         "--threads",
         type=int,
         default=100,
-        help="Number of worker threads to split the ping tests across (default: 100).",
+        help="Number of worker threads to split the ping and traceroute tests across (default: 100).",
     )
 
     return parser.parse_args()
@@ -241,21 +250,35 @@ def main():
     os.makedirs(os.path.dirname(args.plot_output) or ".", exist_ok=True)
     plot_distance_vs_rtt(df, get_own_location(), args.plot_output)
 
-    #concurrency for traceroute to prevent long execution times
-    ip_addresses = df["IP/HOST"].tolist()
+    #concurrency for traceroute to prevent long execution times -- ranged like execute_ping_tests,
+    #but each thread writes its own {raw_dir}/{ip}.txt instead of a shared in-memory structure
     traceroute_rows = []
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        futures = [
-            executor.submit(execute_traceroute_test, ip_addr, traceroute_rows, args.raw_dir)
-            for ip_addr in ip_addresses
-        ]
-        clamped_total = sum(future.result() for future in futures)
+    clamped_total = 0
+    if num_rows:
+        num_tr_threads = max(1, min(args.threads, num_rows))
+        tr_chunk_size = math.ceil(num_rows / num_tr_threads)
+        tr_chunk_bounds = (
+            (start, min(start + tr_chunk_size, num_rows) - 1)
+            for start in range(0, num_rows, tr_chunk_size)
+        )
+        with ThreadPoolExecutor(max_workers=num_tr_threads) as executor:
+            futures = [
+                executor.submit(execute_traceroute_test, df, start, end, args.raw_dir)
+                for start, end in tr_chunk_bounds
+            ]
+            for future in futures:
+                future.result()
+
+        for ip_addr in df["IP/HOST"]:
+            rows, clamp_count = parse_traceroute_output(ip_addr, args.raw_dir)
+            traceroute_rows.extend(rows)
+            clamped_total += clamp_count
 
     if clamped_total:
         print(
             f"Clamped {clamped_total} negative hop-to-hop RTT delta(s) to 0 out of "
             f"{len(traceroute_rows)} responsive hops (path changes / MPLS tunnels / probe "
-            "jitter -- see execute_traceroute_test's comments)."
+            "jitter -- see parse_traceroute_output's comments)."
         )
 
     traceroute_df = pd.DataFrame(traceroute_rows, columns=["DEST_IP", "HOP_NUM", "HOP_RTT"])
