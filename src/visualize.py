@@ -80,7 +80,7 @@ def plot_hopcount_vs_rtt(df: pd.DataFrame, output_path: str) -> None:
     expects the same shape as plot_latency_breakdown. total_rtt = sum of the
     (zero-clamped) HOP_RTT deltas -- see plot_latency_breakdown's docstring.
     '''
-    grouped = df.groupby("DEST_IP").agg(hop_count=("HOP_NUM", "count"), total_rtt=("HOP_RTT", "sum"))
+    grouped = df.groupby("DEST_IP").agg(hop_count=("HOP_NUM", "max"), total_rtt=("HOP_RTT", "sum"))
 
     fig, ax = plt.subplots(figsize=(8, 6))
     ax.scatter(grouped["hop_count"], grouped["total_rtt"])
