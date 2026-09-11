@@ -51,7 +51,7 @@ def plot_latency_breakdown(df: pd.DataFrame, output_path: str) -> None:
     # traceroute filtering non-responsive hops leaves gaps (e.g. hops 4,5,11,12
     # responsive => count is 4 but the last hop number is 12), so counting would
     # silently truncate the higher hops off of every bar.
-    max_hops = df["HOP_NUM"].max()
+    max_hops = int(df["HOP_NUM"].max()) if not df.empty else 0
 
     for hop_num in range(1, max_hops + 1):
         hop_rows = df[df["HOP_NUM"] == hop_num].set_index("DEST_IP")["HOP_RTT"]
