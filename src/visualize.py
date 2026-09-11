@@ -40,17 +40,12 @@ def plot_distance_vs_rtt(df: pd.DataFrame, origin: tuple[float, float], output_p
 
 
 def plot_latency_breakdown(df: pd.DataFrame, output_path: str) -> None:
-    '''Stacked bar chart of per-hop latency. Expects one row per
-    responsive hop: DEST_IP, HOP_NUM, HOP_RTT (see
-    main.execute_traceroute_test for how HOP_RTT is derived).'''
+    '''Stacked bar chart of per-hop latency; expects one row per responsive hop.'''
     fig, ax = plt.subplots(figsize=(10, 6))
 
     dest_ips = df["DEST_IP"].unique()
     bottoms = {dest_ip: 0.0 for dest_ip in dest_ips}
-    # NB: max *hop number* seen, not count of responsive hops per destination --
-    # traceroute filtering non-responsive hops leaves gaps (e.g. hops 4,5,11,12
-    # responsive => count is 4 but the last hop number is 12), so counting would
-    # silently truncate the higher hops off of every bar.
+    # Max hop number seen, not count of responsive hops (which can have gaps).
     max_hops = int(df["HOP_NUM"].max()) if not df.empty else 0
 
     for hop_num in range(1, max_hops + 1):
@@ -75,11 +70,7 @@ def plot_latency_breakdown(df: pd.DataFrame, output_path: str) -> None:
 
 
 def plot_hopcount_vs_rtt(df: pd.DataFrame, output_path: str) -> None:
-    '''
-    scatter plot of hop count vs total RTT to destination, one point per destination IP.
-    expects the same shape as plot_latency_breakdown. total_rtt = sum of the
-    (zero-clamped) HOP_RTT deltas -- see plot_latency_breakdown's docstring.
-    '''
+    '''Scatter plot of hop count vs. total (zero-clamped) RTT, one point per destination IP.'''
     grouped = df.groupby("DEST_IP").agg(hop_count=("HOP_NUM", "max"), total_rtt=("HOP_RTT", "sum"))
 
     fig, ax = plt.subplots(figsize=(8, 6))

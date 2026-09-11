@@ -103,18 +103,9 @@ def execute_ping_tests(df: pd.DataFrame, start: int, end: int):
 
 def execute_traceroute_test(ip_addr: str, results: list, raw_dir: str = "") -> int:
     '''
-    Traceroutes ip_addr, appends one row per responsive hop (DEST_IP, HOP_NUM,
-    HOP_RTT) to the shared `results` list, and returns how many negative
-    hop-to-hop RTT deltas got clamped to 0 (path changes / MPLS tunnels /
-    probe jitter can make a later hop's RTT sample lower than an earlier
-    one, even though real link latency can't be negative).
-
-    If raw_dir is given and a cached raw-output file for ip_addr already
-    exists there (from a previous run), reuses it instead of re-running
-    traceroute against the network -- with ~190 targets, re-measuring
-    everyone on every run gets expensive fast. Delete the file (or the
-    whole raw_dir) to force a fresh measurement for that host. A run that
-    timed out isn't cached, so it's retried next time.
+    Traceroutes ip_addr, appends one row per responsive hop to `results`, and
+    returns how many negative hop-to-hop RTT deltas got clamped to 0. Reuses a
+    cached raw-output file under raw_dir when present instead of re-measuring.
     '''
     raw_path = os.path.join(raw_dir, f"{ip_addr}.txt") if raw_dir else ""
 
@@ -139,9 +130,7 @@ def execute_traceroute_test(ip_addr: str, results: list, raw_dir: str = "") -> i
         print(stdout)
 
         if raw_path and res.returncode == 0:
-            # Keep the raw output on disk so re-parsing or spot-checking a hop
-            # never requires re-running the measurement against the real
-            # network -- and so a later run can skip this host entirely.
+            # Cache the raw output so later runs can skip re-measuring this host.
             os.makedirs(raw_dir, exist_ok=True)
             with open(raw_path, "w") as f:
                 f.write(stdout)
@@ -149,11 +138,7 @@ def execute_traceroute_test(ip_addr: str, results: list, raw_dir: str = "") -> i
     rows = []
     prev_rtt = 0.0
     clamp_count = 0
-    # Don't assume the first stdout line is the "traceroute to ..." header and
-    # slice it off -- on some traceroute builds that header prints to stderr,
-    # not stdout, which would silently drop hop 1's real data. TRACEROUTE_HOP_RE
-    # already only matches lines that start with a hop number, so no slicing
-    # is needed to filter the header out.
+    # No header slicing needed: TRACEROUTE_HOP_RE only matches hop-numbered lines.
     for line in stdout.splitlines():
         hop_match = TRACEROUTE_HOP_RE.match(line)
         if not hop_match:
@@ -275,10 +260,7 @@ def main():
 
     traceroute_df = pd.DataFrame(traceroute_rows, columns=["DEST_IP", "HOP_NUM", "HOP_RTT"])
 
-    # 2b wants the breakdown for 5 random destinations specifically -- sample
-    # those out of the full traceroute run above rather than measuring them
-    # separately, so every host only ever gets traced once. Sample only from
-    # destinations that actually got responsive-hop data back.
+    # 2b: sample 5 random destinations from the full traceroute run above.
     responsive_ips = traceroute_df["DEST_IP"].unique().tolist()
     sample_ips = random.sample(responsive_ips, k=min(5, len(responsive_ips)))
     breakdown_df = traceroute_df[traceroute_df["DEST_IP"].isin(sample_ips)]
