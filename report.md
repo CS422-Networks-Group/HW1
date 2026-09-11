@@ -25,7 +25,7 @@ Hop count barely predicts RTT at all. Three of our five destinations tied at 19 
 
 ## References
 
-Repo: https://github.com/CS422-Networks-Group/HW1 - all code below is on branch [`submission`](https://github.com/CS422-Networks-Group/HW1/tree/submission).
+Repo: https://github.com/CS422-Networks-Group/HW1 - all code below is on branch [`main`](https://github.com/CS422-Networks-Group/HW1/tree/main).
 
 **Part 1 - ping + distance vs. RTT** ([`src/main.py`](https://github.com/CS422-Networks-Group/HW1/blob/submission/src/main.py)):
 - [`process_csv`](https://github.com/CS422-Networks-Group/HW1/blob/submission/src/main.py#L41-L81) - resolves each target's location; drops rows whose host can't be resolved, and skips a host that resolves but has no entry in the IP2Location DB, instead of failing the whole run.
