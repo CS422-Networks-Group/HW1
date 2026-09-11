@@ -2,7 +2,7 @@
 
 *AI Acknowledgement*: We used Claude in this assignment to assist with code reviews, merge conflicts, as well as generating code on the function level.
 
-Repo: https://github.com/CS422-Networks-Group/HW1 (branch [`submission`](https://github.com/CS422-Networks-Group/HW1/tree/submission))
+Repo: https://github.com/CS422-Networks-Group/HW1 (branch [`main`](https://github.com/CS422-Networks-Group/HW1/tree/submission))
 
 ## 1 (c) Does distance relate to RTT?
 
