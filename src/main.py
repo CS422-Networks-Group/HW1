@@ -138,7 +138,7 @@ def execute_traceroute_test(ip_addr: str, results: list, raw_dir: str = "") -> i
         stdout = res.stdout
         print(stdout)
 
-        if raw_path:
+        if raw_path and res.returncode == 0:
             # Keep the raw output on disk so re-parsing or spot-checking a hop
             # never requires re-running the measurement against the real
             # network -- and so a later run can skip this host entirely.
